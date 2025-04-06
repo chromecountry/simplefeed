@@ -1,20 +1,19 @@
 #!/usr/bin/env python
 
-"""
-SimpleFeed
-"""
-
 from argparse import ArgumentParser
 from pathlib import Path
-import instaloader
+import sys
+from instagram_private_api import Client
 from datetime import datetime, timedelta
 import requests
+import http
 from credentials import (
     Instagram as InstagramCredentials,
+    Mailgun as MailgunCredentials
 )
 
 PROJECT_ROOT = Path(__file__).absolute().parents[1]
-import sys; sys.path.append(str(PROJECT_ROOT))  # noqa
+sys.path.append(str(PROJECT_ROOT))
 
 
 class SimpleFeed:
@@ -22,48 +21,76 @@ class SimpleFeed:
         self.input = kwargs['input']
         self.address = kwargs['address']
         self.window = int(kwargs['window'])
-
-    def run(self):
-        """
-        Pull Instagram feed posts containing search term and email them
-        """
-        # Instagram login
-        L = instaloader.Instaloader()
-        L.login(
+        self.api = Client(
             InstagramCredentials.USERNAME,
             InstagramCredentials.PASSWORD
         )
 
-        # Get posts
-        posts = L.get_feed_posts()
-        breakpoint()
-        
-        # cutoff_date = datetime.now() - timedelta(days=self.days)
+    def parse_post(self, post):
+        media = post['media_or_ad']
+        caption = media.get('caption', {})
+        caption_text = caption.get('text', '') if isinstance(caption, dict) else ''
 
-        # # Prepare email
-        # email_content = ""
-        # files = []
+        return {
+            'caption': caption_text,
+            'timestamp': media['taken_at'],
+            'user': media['user']['username'],
+            'photo_url': media['carousel_media'][0]['image_versions2']['candidates'][0]['url'] if media.get('carousel_media') else None
+        }
 
-        # # Get matching posts
-        # for post in posts:
-        #     if self.input.lower() in post.caption.lower() and post.date > cutoff_date:
-        #         email_content += f"\n\nCaption: {post.caption}"
-        #         L.download_pic(post.url, post.mediaid)
-        #         files.append(("attachment", open(f"{post.mediaid}.jpg", "rb")))
+    def run(self):
+        # Read input CSV for search terms
+        search_terms = set()
+        with open(self.input) as f:
+            search_terms = {line.strip().lower() for line in f}
 
-        # # Send email
-        # mailgun_url = f"https://api.mailgun.net/v3/{MAILGUN_DOMAIN}/messages"
-        # response = requests.post(
-        #     mailgun_url,
-        #     auth=("api", MAILGUN_API_KEY),
-        #     data={"from": f"Simple Feed <feed@{MAILGUN_DOMAIN}>",
-        #           "to": self.output,
-        #           "subject": f"Instagram Posts Containing '{self.input}'",
-        #           "text": email_content},
-        #     files=files
-        # )
+        feed = self.api.feed_timeline()
+        posts = feed.get('feed_items', [])
+        cutoff = datetime.now() - timedelta(hours=self.window)
 
-        # return 0 if response.ok else 1
+        email_content = []
+        files = []
+
+        for post in posts:
+            post = self.parse_post(post)
+            post_time = datetime.fromtimestamp(post['timestamp'])
+
+            if post_time < cutoff:
+                continue
+
+            caption_words = set(post['caption'].lower().split())
+            matches = [term for term in search_terms if term in caption_words]
+
+            if matches:
+                email_content.append(
+                    f"User: {post['user']}\n"
+                    f"Caption: {post['caption']}\n"
+                    f"Matching terms: {', '.join(matches)}\n"
+                )
+
+                if post['photo_url']:
+                    img_name = f"img_{post['timestamp']}.jpg"
+                    img_data = requests.get(post['photo_url']).content
+                    with open(img_name, 'wb') as f:
+                        f.write(img_data)
+                        files.append(img_name)
+
+        if email_content:
+            auth = 'api', MailgunCredentials.API_KEY
+            url = 'https://api.mailgun.net/v3/mg.alexshulman.com/messages'
+
+            data = {
+                'from': self.address,
+                'to': self.address,
+                'subject': f"SimpleFeed Newsletter {datetime.today()}",
+                'text': "\n\n".join(email_content)
+            }
+
+            result = requests.post(url, auth=auth, data=data)
+
+            return result.status_code == http.HTTPStatus.OK
+
+        return 0
 
 
 def main():
