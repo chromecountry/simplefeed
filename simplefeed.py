@@ -8,6 +8,8 @@ from datetime import datetime, timedelta
 import requests
 from tqdm import tqdm
 import smtplib
+import shutil
+import os
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from email.mime.image import MIMEImage
@@ -32,6 +34,8 @@ class SimpleFeed:
             InstagramCredentials.PASSWORD
         )
         self.search_terms = self.load_search_terms()
+        self.tmp_dir = Path('tmp')
+        self.tmp_dir.mkdir(exist_ok=True)
 
     def load_search_terms(self):
         search_terms = set()
@@ -126,7 +130,7 @@ class SimpleFeed:
                 )
 
                 if post['photo_url']:
-                    img_name = f"img_{post['timestamp']}.jpg"
+                    img_name = self.tmp_dir / f"img_{post['timestamp']}.jpg"
                     img_data = requests.get(post['photo_url']).content
                     with open(img_name, 'wb') as f:
                         f.write(img_data)
@@ -156,15 +160,17 @@ class SimpleFeed:
 
     def run(self):
         retval = 0
-        posts = self.get_posts()
-        content, files = self.process_posts(posts)
+        try:
+            posts = self.get_posts()
+            content, files = self.process_posts(posts)
 
-        if content:
-            self.send_msg(content, files)
-
-        else:
-            print("No matching posts found.")
-            retval = 1
+            if content:
+                self.send_msg(content, files)
+            else:
+                print("No matching posts found.")
+                retval = 1
+        finally:
+            shutil.rmtree(self.tmp_dir)
 
         return retval
 
