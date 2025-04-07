@@ -6,26 +6,39 @@ import sys
 from instagram_private_api import Client
 from datetime import datetime, timedelta
 import requests
-import http
 from tqdm import tqdm
+import smtplib
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
+from email.mime.image import MIMEImage
 from credentials import (
     Instagram as InstagramCredentials,
-    Mailgun as MailgunCredentials
+    Gmail as GmailCredentials
 )
 
 PROJECT_ROOT = Path(__file__).absolute().parents[1]
 sys.path.append(str(PROJECT_ROOT))
 
 
+MAX_POSTS = 500
+
+
 class SimpleFeed:
     def __init__(self, *args, **kwargs):
         self.input = kwargs['input']
-        self.address = kwargs['address']
         self.window = int(kwargs['window'])
         self.api = Client(
             InstagramCredentials.USERNAME,
             InstagramCredentials.PASSWORD
         )
+        self.search_terms = self.load_search_terms()
+
+    def load_search_terms(self):
+        search_terms = set()
+        with open(self.input) as f:
+            search_terms = {line.strip().lower() for line in f}
+
+        return search_terms
 
     def parse_post(self, post):
         if 'media_or_ad' not in post:
@@ -41,16 +54,11 @@ class SimpleFeed:
             'photo_url': media['carousel_media'][0]['image_versions2']['candidates'][0]['url'] if media.get('carousel_media') else None
         }
 
-    def run(self):
-        # Read input CSV for search terms
-        search_terms = set()
-        with open(self.input) as f:
-            search_terms = {line.strip().lower() for line in f}
-
+    def get_posts(self):
         posts = []
         feed = self.api.feed_timeline()
         posts.extend(feed.get('feed_items', []))
-        max_posts = 500
+        max_posts = MAX_POSTS
 
         pbar = tqdm(total=max_posts, desc="Fetching posts")
         pbar.update(len(posts))
@@ -60,12 +68,6 @@ class SimpleFeed:
             new_posts = feed.get('feed_items', [])
             posts.extend(new_posts)
             pbar.update(len(new_posts))
-
-        breakpoint()
-        cutoff = datetime.now() - timedelta(hours=self.window)
-
-        email_content = []
-        files = []
 
         unique_posts = set()
         date_counts = {}
@@ -80,6 +82,12 @@ class SimpleFeed:
         for date, count in sorted(date_counts.items()):
             print(f"{date}: {count} posts")
 
+        return posts
+
+    def process_posts(self, posts):
+        cutoff = datetime.now() - timedelta(hours=self.window)
+        content = []
+        files = []
         for post in posts:
             post = self.parse_post(post)
             if not post:
@@ -90,13 +98,15 @@ class SimpleFeed:
                 continue
 
             caption_words = set(post['caption'].lower().split())
-            matches = [term for term in search_terms if term in caption_words]
+            matches = [term for term in self.search_terms if term in caption_words]
 
             if matches:
-                email_content.append(
-                    f"User: {post['user']}\n"
-                    f"Caption: {post['caption']}\n"
-                    f"Matching terms: {', '.join(matches)}\n"
+                img_name = f"img_{post['timestamp']}"
+                content.append(
+                    f"<b>Matching terms:</b> {', '.join(matches)}<br>"
+                    f"<b>User:</b> @{post['user']}<br>"
+                    f"<b>Caption:</b> {post['caption']}<br>"
+                    f"<img src='cid:{img_name}'><hr>"
                 )
 
                 if post['photo_url']:
@@ -105,24 +115,34 @@ class SimpleFeed:
                     with open(img_name, 'wb') as f:
                         f.write(img_data)
                         files.append(img_name)
-        breakpoint()
 
-        if email_content:
-            auth = 'api', MailgunCredentials.API_KEY
-            url = 'https://api.mailgun.net/v3/mg.alexshulman.com/messages'
+        return content, files
 
-            data = {
-                'from': self.address,
-                'to': self.address,
-                'subject': f"SimpleFeed Newsletter {datetime.today()}",
-                'text': "\n\n".join(email_content)
-            }
+    def run(self):
 
-            result = requests.post(url, auth=auth, data=data)
+        posts = self.get_posts()
+        content, files = self.process_posts(posts)
 
-            return result.status_code == http.HTTPStatus.OK
+        if content:
+            msg = MIMEMultipart()
+            msg['From'] = GmailCredentials.EMAIL
+            msg['To'] = GmailCredentials.EMAIL
+            msg['Subject'] = f"SimpleFeed Newsletter {datetime.today().date()}"
+            msg.attach(MIMEText("\n\n".join(content), 'html'))
+            for file in files:
+                with open(file, 'rb') as f:
+                    img = MIMEImage(f.read())
+                    img.add_header('Content-ID', f'<{file}>')
+                    msg.attach(img)
 
-        return 0
+            server = smtplib.SMTP('smtp.gmail.com', 587)
+            server.starttls()
+            server.login(GmailCredentials.EMAIL, GmailCredentials.PASSWORD)
+            server.send_message(msg)
+            server.quit()
+            return True
+
+        return False
 
 
 def main():
@@ -137,13 +157,6 @@ def main():
         help='Input csv containing search terms'
     )
     parser.add_argument(
-        '-a',
-        '--address',
-        dest='address',
-        required=True,
-        help='Recipient email'
-    )
-    parser.add_argument(
         '-w',
         '--window',
         dest='window',
@@ -152,10 +165,9 @@ def main():
 
     args = parser.parse_args()
     input = args.input
-    address = args.address
     window = args.window
 
-    simple_feed = SimpleFeed(input=input, address=address, window=window)
+    simple_feed = SimpleFeed(input=input, window=window)
     retval = simple_feed.run()
 
     return retval
