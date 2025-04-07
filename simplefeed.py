@@ -7,6 +7,7 @@ from instagram_private_api import Client
 from datetime import datetime, timedelta
 import requests
 import http
+from tqdm import tqdm
 from credentials import (
     Instagram as InstagramCredentials,
     Mailgun as MailgunCredentials
@@ -27,6 +28,8 @@ class SimpleFeed:
         )
 
     def parse_post(self, post):
+        if 'media_or_ad' not in post:
+            return None
         media = post['media_or_ad']
         caption = media.get('caption', {})
         caption_text = caption.get('text', '') if isinstance(caption, dict) else ''
@@ -44,15 +47,43 @@ class SimpleFeed:
         with open(self.input) as f:
             search_terms = {line.strip().lower() for line in f}
 
+        posts = []
         feed = self.api.feed_timeline()
-        posts = feed.get('feed_items', [])
+        posts.extend(feed.get('feed_items', []))
+        max_posts = 500
+
+        pbar = tqdm(total=max_posts, desc="Fetching posts")
+        pbar.update(len(posts))
+
+        while feed.get('next_max_id') and len(posts) < max_posts:
+            feed = self.api.feed_timeline(max_id=feed['next_max_id'])
+            new_posts = feed.get('feed_items', [])
+            posts.extend(new_posts)
+            pbar.update(len(new_posts))
+
+        breakpoint()
         cutoff = datetime.now() - timedelta(hours=self.window)
 
         email_content = []
         files = []
 
+        unique_posts = set()
+        date_counts = {}
+        for post in posts:
+            if 'media_or_ad' in post:
+                unique_posts.add(post['media_or_ad']['pk'])
+                date = datetime.fromtimestamp(post['media_or_ad']['taken_at']).date()
+                date_counts[date] = date_counts.get(date, 0) + 1
+
+        print(f"Total unique posts: {len(unique_posts)}")
+        print("\nPosts by date:")
+        for date, count in sorted(date_counts.items()):
+            print(f"{date}: {count} posts")
+
         for post in posts:
             post = self.parse_post(post)
+            if not post:
+                continue
             post_time = datetime.fromtimestamp(post['timestamp'])
 
             if post_time < cutoff:
@@ -74,6 +105,7 @@ class SimpleFeed:
                     with open(img_name, 'wb') as f:
                         f.write(img_data)
                         files.append(img_name)
+        breakpoint()
 
         if email_content:
             auth = 'api', MailgunCredentials.API_KEY
