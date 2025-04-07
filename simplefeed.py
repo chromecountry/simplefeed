@@ -40,18 +40,41 @@ class SimpleFeed:
 
         return search_terms
 
+    def get_stats(self, posts):
+        unique_posts = set()
+        date_counts = {}
+        for post in posts:
+            if 'media_or_ad' in post:
+                unique_posts.add(post['media_or_ad']['pk'])
+                date = datetime.fromtimestamp(post['media_or_ad']['taken_at'])
+                date = date.date()
+                date_counts[date] = date_counts.get(date, 0) + 1
+
+        print(f"Total unique posts: {len(unique_posts)}")
+        print("\nPosts by date:")
+        for date, count in sorted(date_counts.items()):
+            print(f"{date}: {count} posts")
+
     def parse_post(self, post):
         if 'media_or_ad' not in post:
             return None
         media = post['media_or_ad']
+
         caption = media.get('caption', {})
-        caption_text = caption.get('text', '') if isinstance(caption, dict) else ''
+        caption_text = ''
+        if isinstance(caption, dict):
+            caption_text = caption.get('text', '')
+
+        photo_url = None
+        if media.get('carousel_media'):
+            mask = media['carousel_media'][0]['image_versions2']
+            photo_url = mask['candidates'][0]['url']
 
         return {
             'caption': caption_text,
             'timestamp': media['taken_at'],
             'user': media['user']['username'],
-            'photo_url': media['carousel_media'][0]['image_versions2']['candidates'][0]['url'] if media.get('carousel_media') else None
+            'photo_url': photo_url
         }
 
     def get_posts(self):
@@ -69,18 +92,9 @@ class SimpleFeed:
             posts.extend(new_posts)
             pbar.update(len(new_posts))
 
-        unique_posts = set()
-        date_counts = {}
-        for post in posts:
-            if 'media_or_ad' in post:
-                unique_posts.add(post['media_or_ad']['pk'])
-                date = datetime.fromtimestamp(post['media_or_ad']['taken_at']).date()
-                date_counts[date] = date_counts.get(date, 0) + 1
+        pbar.close()
 
-        print(f"Total unique posts: {len(unique_posts)}")
-        print("\nPosts by date:")
-        for date, count in sorted(date_counts.items()):
-            print(f"{date}: {count} posts")
+        self.get_stats(posts)
 
         return posts
 
@@ -92,13 +106,15 @@ class SimpleFeed:
             post = self.parse_post(post)
             if not post:
                 continue
-            post_time = datetime.fromtimestamp(post['timestamp'])
 
+            post_time = datetime.fromtimestamp(post['timestamp'])
             if post_time < cutoff:
                 continue
 
             caption_words = set(post['caption'].lower().split())
-            matches = [term for term in self.search_terms if term in caption_words]
+            matches = [
+                term for term in self.search_terms if term in caption_words
+            ]
 
             if matches:
                 img_name = f"img_{post['timestamp']}"
@@ -118,31 +134,39 @@ class SimpleFeed:
 
         return content, files
 
-    def run(self):
+    def send_msg(self, content, files):
+        msg = MIMEMultipart()
+        msg['From'] = GmailCredentials.EMAIL
+        msg['To'] = GmailCredentials.EMAIL
+        msg['Subject'] = f"SimpleFeed Newsletter {datetime.today().date()}"
+        msg.attach(MIMEText("\n\n".join(content), 'html'))
+        for file in files:
+            with open(file, 'rb') as f:
+                img = MIMEImage(f.read())
+                img.add_header('Content-ID', f'<{file}>')
+                msg.attach(img)
 
+        server = smtplib.SMTP('smtp.gmail.com', 587)
+        server.starttls()
+        server.login(GmailCredentials.EMAIL, GmailCredentials.PASSWORD)
+        server.send_message(msg)
+        server.quit()
+
+        return True
+
+    def run(self):
+        retval = 0
         posts = self.get_posts()
         content, files = self.process_posts(posts)
 
         if content:
-            msg = MIMEMultipart()
-            msg['From'] = GmailCredentials.EMAIL
-            msg['To'] = GmailCredentials.EMAIL
-            msg['Subject'] = f"SimpleFeed Newsletter {datetime.today().date()}"
-            msg.attach(MIMEText("\n\n".join(content), 'html'))
-            for file in files:
-                with open(file, 'rb') as f:
-                    img = MIMEImage(f.read())
-                    img.add_header('Content-ID', f'<{file}>')
-                    msg.attach(img)
+            self.send_msg(content, files)
 
-            server = smtplib.SMTP('smtp.gmail.com', 587)
-            server.starttls()
-            server.login(GmailCredentials.EMAIL, GmailCredentials.PASSWORD)
-            server.send_message(msg)
-            server.quit()
-            return True
+        else:
+            print("No matching posts found.")
+            retval = 1
 
-        return False
+        return retval
 
 
 def main():
