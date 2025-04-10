@@ -9,7 +9,7 @@ import requests
 from tqdm import tqdm
 import smtplib
 import shutil
-import os
+import re
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from email.mime.image import MIMEImage
@@ -22,6 +22,7 @@ PROJECT_ROOT = Path(__file__).absolute().parents[1]
 sys.path.append(str(PROJECT_ROOT))
 
 
+BIO_PATTERN = r'\bbio\b|\bbio\.'
 MAX_POSTS = 500
 
 
@@ -78,6 +79,7 @@ class SimpleFeed:
             'caption': caption_text,
             'timestamp': media['taken_at'],
             'user': media['user']['username'],
+            'user_id': media['user']['pk'],
             'photo_url': photo_url
         }
 
@@ -106,6 +108,8 @@ class SimpleFeed:
         cutoff = datetime.now() - timedelta(hours=self.window)
         content = []
         files = []
+        matched_posts = []
+
         for post in posts:
             post = self.parse_post(post)
             if not post:
@@ -122,19 +126,54 @@ class SimpleFeed:
 
             if matches:
                 img_name = f"img_{post['timestamp']}"
-                content.append(
+                caption = post['caption']
+
+                if re.search(BIO_PATTERN, caption, re.IGNORECASE):
+                    user_info = self.api.user_info(post['user_id'])
+                    if user_info['user'].get('bio_links'):
+                        bio_urls = [
+                            link['url'] for link in user_info['user']['bio_links']
+                        ]
+                        if bio_urls:
+                            if len(bio_urls) == 1:
+                                caption = re.sub(
+                                    BIO_PATTERN,
+                                    f"<a href='{bio_urls[0]}'>bio</a>",
+                                    caption,
+                                    flags=re.IGNORECASE
+                                )
+                            else:
+                                numbered_links = ' '.join(
+                                    f"<a href='{url}'>[{i+1}]</a>"
+                                    for i, url in enumerate(bio_urls)
+                                )
+                                caption += f"\n\nBio links: {numbered_links}"
+
+                post_content = (
+                    f"<b>Date:</b> {post_time.strftime('%Y-%m-%d %H:%M')}<br>"
                     f"<b>Matching terms:</b> {', '.join(matches)}<br>"
                     f"<b>User:</b> @{post['user']}<br>"
-                    f"<b>Caption:</b> {post['caption']}<br>"
+                    f"<b>Caption:</b> {caption}<br>"
                     f"<img src='cid:{img_name}'><hr>"
                 )
 
-                if post['photo_url']:
-                    img_name = self.tmp_dir / f"img_{post['timestamp']}.jpg"
-                    img_data = requests.get(post['photo_url']).content
-                    with open(img_name, 'wb') as f:
-                        f.write(img_data)
-                        files.append(img_name)
+                matched_posts.append({
+                    'date': post_time,
+                    'content': post_content,
+                    'photo_url': post['photo_url'],
+                    'timestamp': post['timestamp']
+                })
+
+        matched_posts.sort(key=lambda x: x['date'])
+
+        for post in matched_posts:
+            content.append(post['content'])
+            if post['photo_url']:
+                img_name = self.tmp_dir / f"img_{post['timestamp']}.jpg"
+                img_data = requests.get(post['photo_url']).content
+                with open(img_name, 'wb') as f:
+                    f.write(img_data)
+                    files.append(img_name)
 
         return content, files
 
