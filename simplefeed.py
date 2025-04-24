@@ -179,7 +179,8 @@ class SimpleFeed:
                     'date': post_time,
                     'content': post_content,
                     'photo_url': post['photo_url'],
-                    'timestamp': post['timestamp']
+                    'timestamp': post['timestamp'],
+                    'user': post['user']
                 })
 
         matched_posts.sort(key=lambda x: x['date'])
