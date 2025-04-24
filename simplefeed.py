@@ -25,7 +25,7 @@ sys.path.append(str(PROJECT_ROOT))
 
 BIO_PATTERN = r'\bbio\b|\bbio\.'
 
-MAX_POSTS = 500
+MAX_POSTS = 300
 DEFAULT_WINDOW = 24  # hours
 LAST_SUCCESS_FILE = "last_success.txt"
 
