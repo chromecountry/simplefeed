@@ -143,7 +143,7 @@ class SimpleFeed:
             ]
 
             if matches:
-                img_name = f"img_{post['timestamp']}"
+                img_name = f"{post['user']}_{post['timestamp']}"
                 caption = post['caption']
 
                 if re.search(BIO_PATTERN, caption, re.IGNORECASE):
@@ -187,7 +187,7 @@ class SimpleFeed:
         for post in matched_posts:
             content.append(post['content'])
             if post['photo_url']:
-                img_name = self.tmp_dir / f"img_{post['timestamp']}.jpg"
+                img_name = self.tmp_dir / f"{post['user']}_{post['timestamp']}.jpg"
                 img_data = requests.get(post['photo_url']).content
                 with open(img_name, 'wb') as f:
                     f.write(img_data)
