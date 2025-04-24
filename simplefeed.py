@@ -1,6 +1,7 @@
 #!/usr/bin/env python
 
 from argparse import ArgumentParser
+from math import ceil
 from pathlib import Path
 import sys
 from instagram_private_api import Client
@@ -23,13 +24,16 @@ sys.path.append(str(PROJECT_ROOT))
 
 
 BIO_PATTERN = r'\bbio\b|\bbio\.'
+
 MAX_POSTS = 500
+DEFAULT_WINDOW = 24  # hours
+LAST_SUCCESS_FILE = "last_success.txt"
 
 
 class SimpleFeed:
     def __init__(self, *args, **kwargs):
         self.input = kwargs['input']
-        self.window = int(kwargs['window'])
+        self.window = self.get_window(kwargs['window'])
         self.api = Client(
             InstagramCredentials.USERNAME,
             InstagramCredentials.PASSWORD
@@ -37,6 +41,20 @@ class SimpleFeed:
         self.search_terms = self.load_search_terms()
         self.tmp_dir = Path('tmp')
         self.tmp_dir.mkdir(exist_ok=True)
+
+    def get_window(self, window):
+        if window:
+            return int(window)
+        try:
+            with open(LAST_SUCCESS_FILE) as f:
+                last_run = datetime.fromisoformat(f.read().strip())
+                hours = ceil((datetime.now() - last_run).total_seconds() / 3600)
+                return int(hours)
+        except FileNotFoundError:
+            return DEFAULT_WINDOW
+        except ValueError:
+            print("Invalid datetime format in last_success file")
+            return 24
 
     def load_search_terms(self):
         search_terms = set()
@@ -205,6 +223,8 @@ class SimpleFeed:
 
             if content:
                 self.send_msg(content, files)
+                with open(LAST_SUCCESS_FILE, 'w') as f:
+                    f.write(datetime.now().isoformat())
             else:
                 print("No matching posts found.")
                 retval = 1
