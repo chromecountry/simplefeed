@@ -1,5 +1,6 @@
 #!/bin/bash
 
+source simplefeed_env/bin/activate
 python3 simple_feed.py -i terms.csv
 
 if [ $? -eq 0 ]; then
@@ -7,3 +8,4 @@ if [ $? -eq 0 ]; then
 else
     echo "SimpleFeed encountered an error"
 fi
+deactivate
